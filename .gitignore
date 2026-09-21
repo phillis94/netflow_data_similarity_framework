@@ -3,3 +3,10 @@ test_data
 test_data_tmp
 test_data_old
 experimental_data
+
+# --- local project data / IDE / OS files (mp-lissmann adaptation) ---
+data/
+.idea/
+.DS_Store
+**/.DS_Store
+test_samples/real/train_not_preprocessed_0.csv

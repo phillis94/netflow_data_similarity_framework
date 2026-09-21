@@ -54,7 +54,7 @@ if __name__ == '__main__':
     load_path = args.load_path
     store_path = args.store_path
 
-    CHUNKS = 30
+    CHUNKS = 1
     draw_and_store_samples(load_path, store_path, CHUNKS)
 
     #python create_samples.py -l '../../Datasets/Queensland_NetFlow/NetFlow_Benchmark/NF-ToN-IoT.csv' -s './test_samples/real/'

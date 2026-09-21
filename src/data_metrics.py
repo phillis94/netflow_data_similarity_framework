@@ -169,20 +169,49 @@ def test_isolation_forest_dsicriminator_raw(x_ds_1, x_ds_2):
             'if_disc_y_ds2':y_ds_2, 'if_disc_tr-ds2_tst-ds1':anomaly_scores_ds_2}
 
 
-def test_isolation_forest_task_raw(ds_1, ds_2):
+def split_task_frames(ds_1, ds_2, ds_eval=None):
+    """Build the (train, eval) frames for the task metrics.
+
+    Without ds_eval this is the original TRTS setup: train on one dataset's benign flows,
+    score the other dataset in full, and grade against that dataset's own labels.
+
+    With ds_eval it becomes TSTR, which is what an unsupervised AD pipeline actually needs.
+    The CIDDS generators in ../mp-lissmann are trained on the attack-free train split by
+    design, so both ds_1 (synthetic) and ds_2 (real train reference) are 100 % Label==0 and
+    the original setup degenerates: it trains on one class and grades against one class, so
+    F1 carries no information and the Domain Dissimilarity Score built on it is undefined.
+
+    Instead, both detectors are trained on their own benign flows and evaluated on the *same*
+    real, attack-carrying sample. The synthetic-trained score against the real-trained score
+    is then a direct answer to "how much detection quality is lost by substituting synthetic
+    data", which is the question RQ4 needs and which no distribution distance answers.
+
+    Sharing one eval frame across both directions is what makes the two numbers a paired
+    comparison; giving each its own sample would let the difference between them come from
+    the draw rather than from the training data.
+    """
+    x_ds_1_train = ds_1[ds_1['Label'] == 0].reset_index(drop=True).drop(columns=['Label'])
+    x_ds_2_train = ds_2[ds_2['Label'] == 0].reset_index(drop=True).drop(columns=['Label'])
+
+    if ds_eval is None:
+        y_for_ds_1_model, x_for_ds_1_model = ds_2['Label'], ds_2.drop(columns=['Label'])
+        y_for_ds_2_model, x_for_ds_2_model = ds_1['Label'], ds_1.drop(columns=['Label'])
+    else:
+        y_for_ds_1_model = y_for_ds_2_model = ds_eval['Label']
+        x_for_ds_1_model = x_for_ds_2_model = ds_eval.drop(columns=['Label'])
+
+    #range from [-1,1]; benign -> +1 (inlier), attack -> -1, matching predict()
+    y_for_ds_1_model = ((y_for_ds_1_model*2)-1)*-1
+    y_for_ds_2_model = ((y_for_ds_2_model*2)-1)*-1
+
+    return (x_ds_1_train, x_for_ds_1_model, y_for_ds_1_model,
+            x_ds_2_train, x_for_ds_2_model, y_for_ds_2_model)
+
+
+def test_isolation_forest_task_raw(ds_1, ds_2, ds_eval=None):
     #x_ds_1, y_ds_1, x_ds_2, y_ds_2
-    y_ds_1 = ds_1['Label']
-    x_ds_1_train = ds_1[ds_1['Label']==0].reset_index(drop=True) #filter only normal
-    x_ds_1_train = x_ds_1_train.drop(columns=['Label']) 
-    x_ds_1 = ds_1.drop(columns=['Label']) 
-
-    y_ds_2 = ds_2['Label']
-    x_ds_2_train = ds_2[ds_2['Label']==0].reset_index(drop=True) #filter only normal
-    x_ds_2_train = x_ds_2_train.drop(columns=['Label']) 
-    x_ds_2 = ds_2.drop(columns=['Label']) 
-
-    y_ds_1 = ((y_ds_1*2)-1)*-1 #range from [-1,1]
-    y_ds_2 = ((y_ds_2*2)-1)*-1 #range from [-1,1]
+    (x_ds_1_train, x_ds_2, y_ds_2,
+     x_ds_2_train, x_ds_1, y_ds_1) = split_task_frames(ds_1, ds_2, ds_eval)
 
     #fit ds_1, test ds_2
     #clf_ds_1 = IsolationForest(random_state=42, n_estimators=1000, max_features=1.0, max_samples=1.0, bootstrap=False, contamination=0.0001, n_jobs=2).fit(X=x_ds_1_train)
@@ -225,20 +254,10 @@ def test_ocsvm_dsicriminator_raw(x_ds_1, x_ds_2):
     return {'ocsvm_disc_y_ds1':y_ds_1, 'ocsvm_disc_tr-ds1_tst-ds2':anomaly_scores_ds_1,
             'ocsvm_disc_y_ds2':y_ds_2, 'ocsvm_disc_tr-ds2_tst-ds1':anomaly_scores_ds_2}
 
-def test_ocsvm_task_raw(ds_1, ds_2):
+def test_ocsvm_task_raw(ds_1, ds_2, ds_eval=None):
     #x_ds_1, y_ds_1, x_ds_2, y_ds_2
-    y_ds_1 = ds_1['Label']
-    x_ds_1_train = ds_1[ds_1['Label']==0].reset_index(drop=True) #filter only normal
-    x_ds_1_train = x_ds_1_train.drop(columns=['Label']) 
-    x_ds_1 = ds_1.drop(columns=['Label']) 
-
-    y_ds_2 = ds_2['Label']
-    x_ds_2_train = ds_2[ds_2['Label']==0].reset_index(drop=True) #filter only normal
-    x_ds_2_train = x_ds_2_train.drop(columns=['Label']) 
-    x_ds_2 = ds_2.drop(columns=['Label']) 
-
-    y_ds_1 = ((y_ds_1*2)-1)*-1 #range from [-1,1]
-    y_ds_2 = ((y_ds_2*2)-1)*-1 #range from [-1,1]
+    (x_ds_1_train, x_ds_2, y_ds_2,
+     x_ds_2_train, x_ds_1, y_ds_1) = split_task_frames(ds_1, ds_2, ds_eval)
 
     #fit ds_1, test ds_2
     clf_ds_1 = OneClassSVM().fit(X=x_ds_1_train)
@@ -256,30 +275,30 @@ def test_ocsvm_task_raw(ds_1, ds_2):
             'ocsvm_task_y_ds2':y_ds_2, 'ocsvm_task_tr-ds2_tst-ds1':anomaly_scores_ds_2}
 
 
-import xgboost as xgb
+#import xgboost as xgb
 
-def test_xgboost_task_raw(ds_1, ds_2):
-    #x_ds_1, y_ds_1, x_ds_2, y_ds_2
-    y_ds_1 = ds_1['Label']
-    x_ds_1 = ds_1.drop(columns=['Label']) 
-
-    y_ds_2 = ds_2['Label']
-    x_ds_2 = ds_2.drop(columns=['Label']) 
-
-    #y_ds_1 = ((y_ds_1*2)-1)*-1 #range from [-1,1]
-    #y_ds_2 = ((y_ds_2*2)-1)*-1 #range from [-1,1]
-
-    #fit ds_1, test ds_2
-    clf_ds_1 = xgb.XGBClassifier(n_jobs=2).fit(x_ds_1, y_ds_1)
-    anomaly_scores_ds_1 = clf_ds_1.predict(x_ds_2)     
-
-    #fit ds_2, test_ds_1
-    clf_ds_2 = xgb.XGBClassifier(n_jobs=2).fit(x_ds_2, y_ds_2)
-    anomaly_scores_ds_2 = clf_ds_2.predict(x_ds_1)
-
-
-    anomaly_scores_ds_1 = pd.Series(anomaly_scores_ds_1.flatten())
-    anomaly_scores_ds_2 = pd.Series(anomaly_scores_ds_2.flatten())
-    
-    return {'xgb_task_y_ds1':y_ds_1, 'xgb_task_tr-ds1_tst-ds2':anomaly_scores_ds_1,
-            'xgb_task_y_ds2':y_ds_2, 'xgb_task_tr-ds2_tst-ds1':anomaly_scores_ds_2}
+# def test_xgboost_task_raw(ds_1, ds_2):
+#     #x_ds_1, y_ds_1, x_ds_2, y_ds_2
+#     y_ds_1 = ds_1['Label']
+#     x_ds_1 = ds_1.drop(columns=['Label'])
+#
+#     y_ds_2 = ds_2['Label']
+#     x_ds_2 = ds_2.drop(columns=['Label'])
+#
+#     #y_ds_1 = ((y_ds_1*2)-1)*-1 #range from [-1,1]
+#     #y_ds_2 = ((y_ds_2*2)-1)*-1 #range from [-1,1]
+#
+#     #fit ds_1, test ds_2
+#     clf_ds_1 = xgb.XGBClassifier(n_jobs=2).fit(x_ds_1, y_ds_1)
+#     anomaly_scores_ds_1 = clf_ds_1.predict(x_ds_2)
+#
+#     #fit ds_2, test_ds_1
+#     clf_ds_2 = xgb.XGBClassifier(n_jobs=2).fit(x_ds_2, y_ds_2)
+#     anomaly_scores_ds_2 = clf_ds_2.predict(x_ds_1)
+#
+#
+#     anomaly_scores_ds_1 = pd.Series(anomaly_scores_ds_1.flatten())
+#     anomaly_scores_ds_2 = pd.Series(anomaly_scores_ds_2.flatten())
+#
+#     return {'xgb_task_y_ds1':y_ds_1, 'xgb_task_tr-ds1_tst-ds2':anomaly_scores_ds_1,
+#             'xgb_task_y_ds2':y_ds_2, 'xgb_task_tr-ds2_tst-ds1':anomaly_scores_ds_2}

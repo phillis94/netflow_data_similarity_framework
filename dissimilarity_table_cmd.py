@@ -61,6 +61,23 @@ def calc_metrics(load_path, syntax_path, store_path):
                     'xgb_task_tr-ds2_tst-ds1_f1-weighted',
                     'error_flows']
                 
+    # -1 is the framework's "metric could not be computed" sentinel. It has to be dropped
+    # *before* the inversion below, which would otherwise turn it into 2.0 -- a value outside
+    # the [0,1] range of every real metric, silently dominating the mean it is averaged into.
+    # This is not hypothetical: test_xgboost_task_raw is commented out (xgboost is not even a
+    # dependency), so all six xgb_* columns are always -1, and two of them sit in
+    # domain_metrics. Left alone they pushed the Domain Dissimilarity Score to 0.76 for both
+    # a synthetic run and a real-vs-real run whose real task scores differed by 0.09.
+    def usable(cols):
+        return [c for c in cols if c in df_results.columns and not (df_results[c] == -1).all()]
+
+    dropped = sorted(set(data_metrics + domain_metrics) - set(usable(data_metrics + domain_metrics)))
+    if dropped:
+        print('skipping metrics that are entirely the -1 error sentinel:', dropped)
+    invert_cols = usable(invert_cols)
+    data_metrics = usable(data_metrics)
+    domain_metrics = usable(domain_metrics)
+
     #invert values
     df_results[invert_cols] = 1- df_results[invert_cols]
     df_results['Data Dissimilarity Score'] = df_results[data_metrics].mean(axis=1)

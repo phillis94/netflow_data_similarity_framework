@@ -1,6 +1,9 @@
 import pandas as pd
 from os import makedirs, listdir
+from pathlib import Path
 import csv
+
+import src.cidds as cidds
 
 def check_ip(value):
     try:
@@ -185,15 +188,15 @@ def check_netflows(df, target_columns):
     #print("ERRORS", error_count)
     return clean_df, error_count_dict
 
-def remove_syntax_erros_files(load_path, store_path, model):
+def remove_syntax_erros_files(load_path, store_path, model, vocab_dir=None):
     COLUMNS_TARGET = [ 'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT',
-                                'PROTOCOL', 
+                                'PROTOCOL',
                                 #'L7_PROTO', #GPT
-                                'IN_BYTES', 'OUT_BYTES', 
+                                'IN_BYTES', 'OUT_BYTES',
                                 'IN_PKTS', 'OUT_PKTS',
-                                'TCP_FLAGS', 
-                                'FLOW_DURATION_MILLISECONDS', 
-                                'Label', 
+                                'TCP_FLAGS',
+                                'FLOW_DURATION_MILLISECONDS',
+                                'Label',
                                 #'Attack' #GPT
     ]
     prefix_store_data = store_path+'/'+model+'/checked_data/'
@@ -203,20 +206,34 @@ def remove_syntax_erros_files(load_path, store_path, model):
     #files = listdir(load_path)
     error_counts_list = []
 
+    # `file` used to be bound only inside the `len(clean_df)>0` branch, so a file whose rows
+    # were all rejected crashed with UnboundLocalError instead of reporting a 100 % error
+    # rate -- exactly the case the check exists to report.
+    file = load_path.split('/')[-1]
+
     #for file in files:
     if '.txt' in load_path or '.csv' in load_path:
         df = pd.read_csv(load_path, usecols=COLUMNS_TARGET, on_bad_lines='skip', quoting=csv.QUOTE_NONE, nrows=10000, header=0)
         #df = pd.read_csv(path, on_bad_lines='skip', quoting=csv.QUOTE_NONE, nrows=10000, header=0)
         #print(df)
         #quit()
-        clean_df, error_count_dict = check_netflows(df, COLUMNS_TARGET)
+        if vocab_dir is None:
+            clean_df, error_count_dict = check_netflows(df, COLUMNS_TARGET)
+        else:
+            # CIDDS: the format checks are meaningless here (a TabDDPM address is a one-hot
+            # slot, so it is always well-formed, and 'External' / '>1024' are legitimate
+            # values of the trained alphabet rather than generation errors). What is counted
+            # instead are the cross-field invariants the model can and does break. See
+            # src/cidds.check_netflows_cidds.
+            ip_tokens, port_tokens = cidds.load_alphabets(Path(vocab_dir))
+            clean_df, error_count_dict = cidds.check_netflows_cidds(df[COLUMNS_TARGET],
+                                                                    ip_tokens, port_tokens)
 
         error_count_dict.update({'file':load_path})
         error_count_dict = pd.Series(error_count_dict)
         error_counts_list.append(error_count_dict)
         if (len(clean_df)>0):
             clean_df.columns=COLUMNS_TARGET
-            file = load_path.split('/')[-1]
             clean_df.to_csv(prefix_store_data+file, header=True, index=False)
 
     error_counts = pd.concat(error_counts_list, ignore_index=True, axis=1).T
